@@ -1,0 +1,124 @@
+---
+title: "Assignment 10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load .Rdata file and merge into single data frame
+
+```{r dataprep}
+library(tidyverse)
+library(caret)
+library(rpart.plot)
+
+#Load data using path of where file is stored
+load("~/OneDrive - cumc.columbia.edu/2023 Columbia Spring/Machine Learning for Epi/ML_Learning_Module10/exposome.RData")
+
+#Merge all data frames into a single data frame. FYI, this is just a shortcut by combining baseR with piping from tidyverse. There are other ways of merging across three data frames that are likely more elegant.
+
+studydata<-merge(exposome,phenotype,by="ID") %>% merge(covariates, by="ID")
+
+#Strip off ID Variable
+studydata$ID<-NULL
+
+#Partition data for use in demonstration
+set.seed(123)
+train_indices<-createDataPartition(y=studydata$e3_bw,p=0.7,list=FALSE)
+train_data<-studydata[train_indices, ]
+test_data<-studydata[-train_indices, ]
+```
+
+### Step 1: Data Exploration of Training Data
+
+```{r dataexplore}
+# Recode variable names based on codebook
+explored <- train_data %>% mutate (PMabs = h_abs_ratio_preg_Log,
+                                   NO2 = h_no2_ratio_preg_Log,
+                                   PM10 = h_pm10_ratio_preg_None,
+                                   PM25 = h_pm25_ratio_preg_None,
+                                   childage = hs_child_age_None,
+                                   childsex = e3_sex_None,
+                                   asthma = hs_asthma) %>% 
+  select(PMabs, NO2, PM10, PM25, childage, childsex, asthma)
+  
+# Descriptive statistics for continuous measures
+summary(explored$PMabs)
+summary(explored$PM25)
+summary(explored$PM10)
+summary(explored$NO2)
+summary(explored$childage) 
+#There are 5 features from exposome and covariates.#
+
+# Descriptive statistics for categorical/binary measures
+table(explored$childsex) #This is 1 feature from covariates.#
+table(explored$asthma) #This is 1 feature from phenotype.#
+
+```
+```{r}
+# calculate correlations between selected continuous variables in the explored dataframe
+explored %>%
+  select(PMabs, NO2, PM10, PM25, childage) %>%
+  cor(use="pairwise.complete.obs")
+
+```
+
+
+
+### Step 2: Research Question
+
+```{r}
+# Research Question:  Do outdoor exposures (air pollution) measured during pregnancy have an impact on the risk of asthma in children aged 6-11 years old? #
+```
+
+
+### Step 3: Implement pipeline to address research question
+
+```{r algorithm}
+# Recode variable names based on codebook
+new_studydata <- studydata %>% mutate(PMabs = h_abs_ratio_preg_Log,
+                                  NO2 = h_no2_ratio_preg_Log,
+                                  PM10 = h_pm10_ratio_preg_None,
+                                  PM25 = h_pm25_ratio_preg_None,
+                                  childage = hs_child_age_None,
+                                  childsex = e3_sex_None,
+                                  asthma = hs_asthma) %>% 
+  select(PMabs, NO2, PM10, PM25, childage, childsex, asthma) %>% 
+  filter( childage >= 6 & childage <= 11 )
+
+# Partition the data into training and testing sets
+set.seed(123)
+trainIndex <- createDataPartition(new_studydata$asthma, p = .7, 
+                                   list = FALSE, 
+                                   times = 1)
+train <- new_studydata[trainIndex,]
+test <- new_studydata[-trainIndex,]
+
+# Train the model using random forest with cross-validation and hyperparameter tuning
+train$asthma <- factor(train$asthma, levels = c(0, 1))
+test$asthma <- factor(test$asthma, levels = c(0, 1))
+
+rf_control <- trainControl(method = "cv", number = 10)
+rf_grid <- expand.grid(mtry = c(2, 3, 4))
+rf_model <- train(asthma ~ ., 
+                  data = train, 
+                  method = "rf", 
+                  trControl = rf_control, 
+                  tuneGrid = rf_grid)
+
+# Print the best parameters found
+bestparameters <- rf_model$bestTune
+
+# Evaluate the final model on the testing data
+pred <- predict(rf_model, newdata = test)
+confusionMatrix(pred, test$asthma)
+
+```
+
+```{r}
+# The confusion matrix and statistics show the performance of the model in predicting the presence or absence of asthma in children aged 6-11 based on the outdoor exposures during pregnancy.#
+# The accuracy of the model was 0.8883, meaning that 88.83% of the cases were correctly classified. The sensitivity of the model was 1.0, indicating that all true positive cases were correctly predicted as positive. The specificity of the model was 0.02439, meaning that only 2.43% of the true negative cases were correctly predicted as negative. The Kappa coefficient, which measures the agreement between the predicted and actual outcomes, was 0.0424, indicating slight agreement. In conclusion, the model did not perform well in predicting the presence of asthma in children aged 6-11 based on the outdoor exposures (air pollution) during pregnancy, as it had low specificity.#
+```
+
